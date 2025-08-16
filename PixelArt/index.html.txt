@@ -1,0 +1,287 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>JoP Pixel Art Generator</title>
+<style>
+  :root { --bg:#0b0f14; --panel:#121923; --muted:#8aa0b2; --text:#e7eef6; --acc:#2563eb; }
+  *{box-sizing:border-box}
+  body{
+    margin:0; background:linear-gradient(135deg,#0f172a,#1e293b);
+    color:var(--text); font:16px/1.45 ui-sans-serif,system-ui,Segoe UI,Inter,Roboto;
+    min-height:100vh; display:flex; align-items:center; justify-content:center; padding:24px;
+  }
+  .card{
+    width:min(1100px,100%); background:rgba(18,25,35,0.85);
+    border:1px solid #1f2a36; border-radius:16px; box-shadow:0 10px 30px rgba(0,0,0,.35);
+    backdrop-filter: blur(10px);
+  }
+  .pane{ padding:18px; }
+  header{ display:flex; align-items:center; gap:14px; margin-bottom:8px; }
+  .swatch{ width:40px; height:40px; border-radius:10px; background:linear-gradient(45deg,#2563eb,#38bdf8); border:1px solid #203048; }
+  h1{ margin:0; font-size:20px; font-weight:800; }
+  p.sub{ margin:.25rem 0 0; color:var(--muted) }
+  .row{ display:grid; grid-template-columns:1fr 1fr; gap:16px; }
+  @media (max-width:900px){ .row{ grid-template-columns:1fr } }
+  label{ font-weight:600; font-size:14px }
+  input[type="number"], input[type="file"], select, button{
+    width:100%; padding:12px 14px; border-radius:12px; border:1px solid #223041;
+    background:#0e1420; color:var(--text);
+  }
+  .stack{ display:flex; gap:10px; align-items:center; flex-wrap:wrap }
+  .muted{ color:var(--muted) }
+  button{ cursor:pointer; background:linear-gradient(180deg,#3e8cff,#2b6fe0); border:1px solid #2d6fdd; font-weight:800 }
+  button:disabled{ opacity:.6; cursor:not-allowed }
+  .canvas-wrap{
+    margin-top:12px; background:#0c131e; border:1px dashed #2a3b52; border-radius:12px; padding:14px;
+    overflow:auto;
+  }
+  .toolbar { display:flex; gap:12px; align-items:center; justify-content:space-between; margin-top:8px; }
+  .toolbar .left, .toolbar .right { display:flex; gap:10px; align-items:center; flex-wrap:wrap }
+  code{ background:#0f1625;border:1px solid #1f2a36;border-radius:8px;padding:2px 6px }
+  .pill{ display:inline-block; padding:4px 10px; border-radius:999px; border:1px solid #2a3b52; background:#0c131e; }
+</style>
+</head>
+<body>
+  <div class="card">
+    <div class="pane">
+      <header>
+        <div class="swatch"></div>
+        <div>
+          <h1>JoP Pixel Art Generator</h1>
+          <p class="sub">Upload an image → pick JoP canvas size (each = <b>16×16 px</b>) → get a pixelated preview you can copy in-game.</p>
+        </div>
+      </header>
+
+      <div class="row">
+        <div>
+          <label>Image</label>
+          <input id="file" type="file" accept="image/*" />
+          <div class="muted" style="margin-top:6px">Tip: square images work well; use “Cover/Contain” to fit.</div>
+        </div>
+        <div>
+          <label>JoP Canvas Grid</label>
+          <div class="stack">
+            <span class="muted">Width (tiles)</span><input id="tilesW" type="number" min="1" max="64" value="4" style="max-width:110px">
+            <span class="muted">Height (tiles)</span><input id="tilesH" type="number" min="1" max="64" value="3" style="max-width:110px">
+            <span class="muted">Fit</span>
+            <select id="fit" style="max-width:140px">
+              <option value="contain" selected>Contain (letterbox)</option>
+              <option value="cover">Cover (crop)</option>
+              <option value="stretch">Stretch</option>
+            </select>
+          </div>
+        </div>
+      </div>
+
+      <div class="row" style="margin-top:12px">
+        <div>
+          <label>Preview & Export</label>
+          <div class="stack">
+            <span class="muted">Display scale</span><input id="scale" type="number" min="1" max="40" value="12" style="max-width:110px">
+            <label class="stack"><input id="showTileGrid" type="checkbox" checked> <span class="muted">Tile grid (16×16)</span></label>
+            <label class="stack"><input id="showPixelGrid" type="checkbox"> <span class="muted">Pixel grid</span></label>
+          </div>
+        </div>
+        <div>
+          <label>&nbsp;</label>
+          <div class="stack">
+            <button id="renderBtn">Generate</button>
+            <button id="downloadBtn" disabled>Download PNG</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="toolbar">
+        <div class="left">
+          <div class="pill">Output pixels: <code id="outSize">—</code></div>
+          <div class="pill">Image fit: <code id="fitInfo">—</code></div>
+        </div>
+        <div class="right muted" id="hoverInfo">Hover a pixel to see its color</div>
+      </div>
+
+      <div class="canvas-wrap">
+        <canvas id="preview" tabindex="0" aria-label="Pixel preview"></canvas>
+      </div>
+
+      <div class="pane muted" style="font-size:13px">
+        Notes: Output size = <b>(tilesW × 16)</b> by <b>(tilesH × 16)</b> pixels. This generator renders with crisp nearest-neighbor scaling—ideal for copying into JoP canvas tiles.
+      </div>
+    </div>
+  </div>
+
+<script>
+(() => {
+  const fileEl = document.getElementById('file');
+  const tilesWEl = document.getElementById('tilesW');
+  const tilesHEl = document.getElementById('tilesH');
+  const fitEl = document.getElementById('fit');
+  const scaleEl = document.getElementById('scale');
+  const showTileGridEl = document.getElementById('showTileGrid');
+  const showPixelGridEl = document.getElementById('showPixelGrid');
+  const renderBtn = document.getElementById('renderBtn');
+  const downloadBtn = document.getElementById('downloadBtn');
+  const outSizeEl = document.getElementById('outSize');
+  const fitInfoEl = document.getElementById('fitInfo');
+  const hoverInfoEl = document.getElementById('hoverInfo');
+  const canvas = document.getElementById('preview');
+  const ctx = canvas.getContext('2d');
+
+  let sourceImg = null;       // HTMLImageElement
+  let lastOffscreen = null;   // offscreen pixel canvas (true size)
+  let lastScale = 12;
+
+  // Helpers
+  const clamp = (v,min,max) => Math.max(min, Math.min(max,v));
+  const toHex = (r,g,b) => '#'+[r,g,b].map(v=>v.toString(16).toUpperCase().padStart(2,'0')).join('');
+
+  function loadImage(file){
+    return new Promise((resolve,reject)=>{
+      const img = new Image();
+      img.onload = () => resolve(img);
+      img.onerror = reject;
+      img.src = URL.createObjectURL(file);
+    });
+  }
+
+  function computeFit(srcW, srcH, dstW, dstH, mode){
+    if(mode==='stretch') return { sx:0, sy:0, sw:srcW, sh:srcH, dx:0, dy:0, dw:dstW, dh:dstH, info:'stretch' };
+    const srcAR = srcW/srcH;
+    const dstAR = dstW/dstH;
+    if(mode==='contain'){
+      // fit inside, letterbox
+      let dw, dh;
+      if(srcAR > dstAR){ dw = dstW; dh = Math.round(dstW/srcAR); }
+      else { dh = dstH; dw = Math.round(dstH*srcAR); }
+      const dx = Math.floor((dstW - dw)/2), dy = Math.floor((dstH - dh)/2);
+      return { sx:0, sy:0, sw:srcW, sh:srcH, dx, dy, dw, dh, info:'contain (letterbox)' };
+    }else{
+      // cover, crop source
+      let sw, sh, sx, sy;
+      if(srcAR > dstAR){ // crop width
+        sh = srcH; sw = Math.round(dstAR*sh);
+        sx = Math.floor((srcW - sw)/2); sy = 0;
+      }else{ // crop height
+        sw = srcW; sh = Math.round(sw/dstAR);
+        sx = 0; sy = Math.floor((srcH - sh)/2);
+      }
+      return { sx, sy, sw, sh, dx:0, dy:0, dw:dstW, dh:dstH, info:'cover (crop)' };
+    }
+  }
+
+  function render(){
+    if(!sourceImg){ alert('Please choose an image first.'); return; }
+
+    const tilesW = clamp(parseInt(tilesWEl.value||'4',10), 1, 64);
+    const tilesH = clamp(parseInt(tilesHEl.value||'3',10), 1, 64);
+    const outW = tilesW*16, outH = tilesH*16;
+
+    // Offscreen canvas at TRUE pixel resolution
+    const off = document.createElement('canvas');
+    off.width = outW; off.height = outH;
+    const octx = off.getContext('2d', { willReadFrequently:true });
+    // Disable smoothing on both passes
+    octx.imageSmoothingEnabled = false;
+    ctx.imageSmoothingEnabled = false;
+
+    // Fit/crop/stretch as requested
+    const fitMode = fitEl.value;
+    const fit = computeFit(sourceImg.naturalWidth, sourceImg.naturalHeight, outW, outH, fitMode);
+    octx.clearRect(0,0,outW,outH);
+    octx.drawImage(
+      sourceImg,
+      fit.sx, fit.sy, fit.sw, fit.sh,
+      fit.dx, fit.dy, fit.dw, fit.dh
+    );
+
+    // Optional “pixel snapping”: average to exact pixel centers to make sure every pixel is crisp.
+    // (Nearest neighbor via drawImage is usually enough; keeping it simple here.)
+    lastOffscreen = off;
+    outSizeEl.textContent = `${outW} × ${outH}`;
+    fitInfoEl.textContent = fit.info;
+
+    // Display at scale
+    const scale = clamp(parseInt(scaleEl.value||'12',10), 1, 40);
+    lastScale = scale;
+    canvas.width = outW * scale;
+    canvas.height = outH * scale;
+
+    // Crisp upscale
+    ctx.imageSmoothingEnabled = false;
+    ctx.clearRect(0,0,canvas.width,canvas.height);
+    ctx.drawImage(off, 0, 0, canvas.width, canvas.height);
+
+    // Draw grid lines
+    if(showPixelGridEl.checked || showTileGridEl.checked){
+      ctx.save();
+      // thin lines for pixels
+      if(showPixelGridEl.checked){
+        ctx.strokeStyle = 'rgba(255,255,255,0.12)';
+        ctx.lineWidth = 1;
+        for(let x=0; x<=outW; x++){
+          ctx.beginPath(); ctx.moveTo(x*scale+0.5,0); ctx.lineTo(x*scale+0.5,canvas.height); ctx.stroke();
+        }
+        for(let y=0; y<=outH; y++){
+          ctx.beginPath(); ctx.moveTo(0,y*scale+0.5); ctx.lineTo(canvas.width,y*scale+0.5); ctx.stroke();
+        }
+      }
+      // thicker lines for tiles (16 px)
+      if(showTileGridEl.checked){
+        ctx.strokeStyle = 'rgba(56,189,248,0.65)'; // cyan-ish
+        ctx.lineWidth = 2;
+        for(let x=0; x<=outW; x+=16){
+          ctx.beginPath(); ctx.moveTo(x*scale+1,0); ctx.lineTo(x*scale+1,canvas.height); ctx.stroke();
+        }
+        for(let y=0; y<=outH; y+=16){
+          ctx.beginPath(); ctx.moveTo(0,y*scale+1); ctx.lineTo(canvas.width,y*scale+1); ctx.stroke();
+        }
+      }
+      ctx.restore();
+    }
+
+    downloadBtn.disabled = false;
+  }
+
+  function downloadPNG(){
+    if(!lastOffscreen){ return; }
+    // Export the true-pixel version (not the scaled preview)
+    const a = document.createElement('a');
+    a.download = 'jop-pixel-art.png';
+    a.href = lastOffscreen.toDataURL('image/png');
+    a.click();
+  }
+
+  // Hover color readout
+  canvas.addEventListener('mousemove', (e)=>{
+    if(!lastOffscreen) { hoverInfoEl.textContent = 'Hover a pixel to see its color'; return; }
+    const rect = canvas.getBoundingClientRect();
+    const x = Math.floor((e.clientX - rect.left) / lastScale);
+    const y = Math.floor((e.clientY - rect.top) / lastScale);
+    const outW = lastOffscreen.width, outH = lastOffscreen.height;
+    if(x<0 || y<0 || x>=outW || y>=outH){ hoverInfoEl.textContent = 'Hover a pixel to see its color'; return; }
+    const octx = lastOffscreen.getContext('2d', { willReadFrequently:true });
+    const data = octx.getImageData(x,y,1,1).data;
+    const hex = toHex(data[0], data[1], data[2]);
+    const tileX = Math.floor(x/16), tileY = Math.floor(y/16);
+    hoverInfoEl.innerHTML = `Pixel <code>${x},${y}</code> · Tile <code>${tileX},${tileY}</code> · <code>${hex}</code>`;
+  });
+
+  // Wire up
+  fileEl.addEventListener('change', async ()=>{
+    const f = fileEl.files && fileEl.files[0];
+    if(!f) return;
+    sourceImg = await loadImage(f);
+    render(); // auto-generate on load
+  });
+  renderBtn.addEventListener('click', render);
+  downloadBtn.addEventListener('click', downloadPNG);
+
+  // Live re-render on setting changes (if image loaded)
+  [tilesWEl, tilesHEl, fitEl, scaleEl, showTileGridEl, showPixelGridEl].forEach(el=>{
+    el.addEventListener('change', ()=>{ if(sourceImg) render(); });
+  });
+})();
+</script>
+</body>
+</html>
