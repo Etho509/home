@@ -50,7 +50,7 @@
         <div class="swatch"></div>
         <div>
           <h1>JoP Pixel Art Generator</h1>
-          <p class="sub">Upload an image → pick JoP canvas size (each = <b>16×16 px</b>) → get a pixelated preview you can copy in-game.</p>
+          <p class="sub">Upload an image → pick JoP canvas size (each canvas tile is <b>16×16</b> or <b>32×32</b>) → get a pixelated preview you can copy in-game.</p>
         </div>
       </header>
 
@@ -65,6 +65,11 @@
           <div class="stack">
             <span class="muted">Width (tiles)</span><input id="tilesW" type="number" min="1" max="64" value="4" style="max-width:110px">
             <span class="muted">Height (tiles)</span><input id="tilesH" type="number" min="1" max="64" value="3" style="max-width:110px">
+            <span class="muted">Canvas type</span>
+            <select id="tileSize" style="max-width:160px">
+              <option value="16" selected>Standard (16×16)</option>
+              <option value="32">Large (32×32)</option>
+            </select>
             <span class="muted">Fit</span>
             <select id="fit" style="max-width:140px">
               <option value="contain" selected>Contain (letterbox)</option>
@@ -80,7 +85,7 @@
           <label>Preview & Export</label>
           <div class="stack">
             <span class="muted">Display scale</span><input id="scale" type="number" min="1" max="40" value="12" style="max-width:110px">
-            <label class="stack"><input id="showTileGrid" type="checkbox" checked> <span class="muted">Tile grid (16×16)</span></label>
+            <label class="stack"><input id="showTileGrid" type="checkbox" checked> <span class="muted">Tile grid</span></label>
             <label class="stack"><input id="showPixelGrid" type="checkbox"> <span class="muted">Pixel grid</span></label>
           </div>
         </div>
@@ -93,7 +98,7 @@
         </div>
       </div>
 
-      <!-- New: per-tile exporter controls -->
+      <!-- Per-tile exporter controls -->
       <div class="row" style="margin-top:12px">
         <div>
           <label>Per-tile Export</label>
@@ -106,7 +111,7 @@
         <div>
           <label>&nbsp;</label>
           <div class="stack">
-            <button id="exportTilesBtn" disabled>Export Tiles (16×16 PNGs)</button>
+            <button id="exportTilesBtn" disabled>Export Tiles (PNG)</button>
           </div>
         </div>
       </div>
@@ -115,6 +120,7 @@
         <div class="left">
           <div class="pill">Output pixels: <code id="outSize">—</code></div>
           <div class="pill">Image fit: <code id="fitInfo">—</code></div>
+          <div class="pill">Tile size: <code id="tileSizeInfo">16×16</code></div>
         </div>
         <div class="right muted" id="hoverInfo">Hover a pixel to see its color</div>
       </div>
@@ -124,7 +130,7 @@
       </div>
 
       <div class="pane muted" style="font-size:13px">
-        Notes: Output size = <b>(tilesW × 16)</b> by <b>(tilesH × 16)</b> pixels. This generator renders with crisp nearest-neighbor scaling—ideal for copying into JoP canvas tiles.
+        Notes: Output size = <b>(tilesW × tileSize)</b> by <b>(tilesH × tileSize)</b>. Tile size is 16 or 32 based on mode.
       </div>
     </div>
   </div>
@@ -134,6 +140,7 @@
   const fileEl = document.getElementById('file');
   const tilesWEl = document.getElementById('tilesW');
   const tilesHEl = document.getElementById('tilesH');
+  const tileSizeEl = document.getElementById('tileSize');
   const fitEl = document.getElementById('fit');
   const scaleEl = document.getElementById('scale');
   const showTileGridEl = document.getElementById('showTileGrid');
@@ -144,18 +151,19 @@
   const tileNameEl = document.getElementById('tileName');
   const outSizeEl = document.getElementById('outSize');
   const fitInfoEl = document.getElementById('fitInfo');
+  const tileSizeInfoEl = document.getElementById('tileSizeInfo');
   const hoverInfoEl = document.getElementById('hoverInfo');
   const canvas = document.getElementById('preview');
   const ctx = canvas.getContext('2d');
 
-  let sourceImg = null;       // HTMLImageElement
-  let lastOffscreen = null;   // offscreen pixel canvas (true size)
+  let sourceImg = null;
+  let lastOffscreen = null;
   let lastScale = 12;
+  let lastTileSize = 16;
 
-  // Helpers
   const clamp = (v,min,max) => Math.max(min, Math.min(max,v));
   const toHex = (r,g,b) => '#'+[r,g,b].map(v=>v.toString(16).toUpperCase().padStart(2,'0')).join('');
-  const sleep = (ms)=> new Promise(r=>setTimeout(r,ms)); // throttle downloads gently
+  const sleep = (ms)=> new Promise(r=>setTimeout(r,ms));
 
   function loadImage(file){
     return new Promise((resolve,reject)=>{
@@ -171,19 +179,17 @@
     const srcAR = srcW/srcH;
     const dstAR = dstW/dstH;
     if(mode==='contain'){
-      // fit inside, letterbox
       let dw, dh;
       if(srcAR > dstAR){ dw = dstW; dh = Math.round(dstW/srcAR); }
       else { dh = dstH; dw = Math.round(dstH*srcAR); }
       const dx = Math.floor((dstW - dw)/2), dy = Math.floor((dstH - dh)/2);
       return { sx:0, sy:0, sw:srcW, sh:srcH, dx, dy, dw, dh, info:'contain (letterbox)' };
     }else{
-      // cover, crop source
       let sw, sh, sx, sy;
-      if(srcAR > dstAR){ // crop width
+      if(srcAR > dstAR){
         sh = srcH; sw = Math.round(dstAR*sh);
         sx = Math.floor((srcW - sw)/2); sy = 0;
-      }else{ // crop height
+      }else{
         sw = srcW; sh = Math.round(sw/dstAR);
         sx = 0; sy = Math.floor((srcH - sh)/2);
       }
@@ -196,45 +202,40 @@
 
     const tilesW = clamp(parseInt(tilesWEl.value||'4',10), 1, 64);
     const tilesH = clamp(parseInt(tilesHEl.value||'3',10), 1, 64);
-    const outW = tilesW*16, outH = tilesH*16;
+    const tileSize = parseInt(tileSizeEl.value||'16',10);
+    lastTileSize = tileSize;
+    tileSizeInfoEl.textContent = `${tileSize}×${tileSize}`;
 
-    // Offscreen canvas at TRUE pixel resolution
+    const outW = tilesW*tileSize, outH = tilesH*tileSize;
+
+    // Offscreen true-size canvas
     const off = document.createElement('canvas');
     off.width = outW; off.height = outH;
     const octx = off.getContext('2d', { willReadFrequently:true });
-    // Disable smoothing on both passes
     octx.imageSmoothingEnabled = false;
     ctx.imageSmoothingEnabled = false;
 
-    // Fit/crop/stretch as requested
     const fitMode = fitEl.value;
     const fit = computeFit(sourceImg.naturalWidth, sourceImg.naturalHeight, outW, outH, fitMode);
     octx.clearRect(0,0,outW,outH);
-    octx.drawImage(
-      sourceImg,
-      fit.sx, fit.sy, fit.sw, fit.sh,
-      fit.dx, fit.dy, fit.dw, fit.dh
-    );
+    octx.drawImage(sourceImg, fit.sx, fit.sy, fit.sw, fit.sh, fit.dx, fit.dy, fit.dw, fit.dh);
 
     lastOffscreen = off;
     outSizeEl.textContent = `${outW} × ${outH}`;
     fitInfoEl.textContent = fit.info;
 
-    // Display at scale
     const scale = clamp(parseInt(scaleEl.value||'12',10), 1, 40);
     lastScale = scale;
     canvas.width = outW * scale;
     canvas.height = outH * scale;
 
-    // Crisp upscale
     ctx.imageSmoothingEnabled = false;
     ctx.clearRect(0,0,canvas.width,canvas.height);
     ctx.drawImage(off, 0, 0, canvas.width, canvas.height);
 
-    // Draw grid lines
+    // Grids
     if(showPixelGridEl.checked || showTileGridEl.checked){
       ctx.save();
-      // pixel grid
       if(showPixelGridEl.checked){
         ctx.strokeStyle = 'rgba(255,255,255,0.12)';
         ctx.lineWidth = 1;
@@ -245,14 +246,13 @@
           ctx.beginPath(); ctx.moveTo(0,y*scale+0.5); ctx.lineTo(canvas.width,y*scale+0.5); ctx.stroke();
         }
       }
-      // tile grid (16 px)
       if(showTileGridEl.checked){
         ctx.strokeStyle = 'rgba(56,189,248,0.65)';
         ctx.lineWidth = 2;
-        for(let x=0; x<=outW; x+=16){
+        for(let x=0; x<=outW; x+=tileSize){
           ctx.beginPath(); ctx.moveTo(x*scale+1,0); ctx.lineTo(x*scale+1,canvas.height); ctx.stroke();
         }
-        for(let y=0; y<=outH; y+=16){
+        for(let y=0; y<=outH; y+=tileSize){
           ctx.beginPath(); ctx.moveTo(0,y*scale+1); ctx.lineTo(canvas.width,y*scale+1); ctx.stroke();
         }
       }
@@ -271,27 +271,27 @@
     a.click();
   }
 
-  // NEW: per-tile PNG export
   async function exportTiles(){
     if(!lastOffscreen) return;
     const outW = lastOffscreen.width;
     const outH = lastOffscreen.height;
-    const tilesX = Math.floor(outW / 16);
-    const tilesY = Math.floor(outH / 16);
+    const tileSize = lastTileSize;
+
+    const tilesX = Math.floor(outW / tileSize);
+    const tilesY = Math.floor(outH / tileSize);
     const namePattern = (tileNameEl.value || 'jop_tile_{x}_{y}.png').trim();
 
     const tileCanvas = document.createElement('canvas');
-    tileCanvas.width = 16; tileCanvas.height = 16;
+    tileCanvas.width = tileSize; tileCanvas.height = tileSize;
     const tctx = tileCanvas.getContext('2d', { willReadFrequently:true });
     tctx.imageSmoothingEnabled = false;
 
-    // Gentle throttle to avoid overwhelming the browser’s download queue
     const THROTTLE_MS = 40;
 
     for(let ty=0; ty<tilesY; ty++){
       for(let tx=0; tx<tilesX; tx++){
-        tctx.clearRect(0,0,16,16);
-        tctx.drawImage(lastOffscreen, tx*16, ty*16, 16, 16, 0, 0, 16, 16);
+        tctx.clearRect(0,0,tileSize,tileSize);
+        tctx.drawImage(lastOffscreen, tx*tileSize, ty*tileSize, tileSize, tileSize, 0, 0, tileSize, tileSize);
         const url = tileCanvas.toDataURL('image/png');
         const a = document.createElement('a');
         const fname = namePattern.replace('{x}', String(tx)).replace('{y}', String(ty));
@@ -300,7 +300,6 @@
         document.body.appendChild(a);
         a.click();
         document.body.removeChild(a);
-        // small pause
         // eslint-disable-next-line no-await-in-loop
         await sleep(THROTTLE_MS);
       }
@@ -318,7 +317,9 @@
     const octx = lastOffscreen.getContext('2d', { willReadFrequently:true });
     const data = octx.getImageData(x,y,1,1).data;
     const hex = toHex(data[0], data[1], data[2]);
-    const tileX = Math.floor(x/16), tileY = Math.floor(y/16);
+
+    const tileSize = lastTileSize;
+    const tileX = Math.floor(x/tileSize), tileY = Math.floor(y/tileSize);
     hoverInfoEl.innerHTML = `Pixel <code>${x},${y}</code> · Tile <code>${tileX},${tileY}</code> · <code>${hex}</code>`;
   });
 
@@ -335,7 +336,7 @@
   downloadBtn.addEventListener('click', downloadPNG);
   exportTilesBtn.addEventListener('click', exportTiles);
 
-  [tilesWEl, tilesHEl, fitEl, scaleEl, showTileGridEl, showPixelGridEl].forEach(el=>{
+  [tilesWEl, tilesHEl, tileSizeEl, fitEl, scaleEl, showTileGridEl, showPixelGridEl].forEach(el=>{
     el.addEventListener('change', renderIfReady);
   });
 })();
