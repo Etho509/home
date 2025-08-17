@@ -25,7 +25,7 @@
   .row{ display:grid; grid-template-columns:1fr 1fr; gap:16px; }
   @media (max-width:900px){ .row{ grid-template-columns:1fr } }
   label{ font-weight:600; font-size:14px }
-  input[type="number"], input[type="file"], select, button{
+  input[type="number"], input[type="file"], input[type="text"], select, button{
     width:100%; padding:12px 14px; border-radius:12px; border:1px solid #223041;
     background:#0e1420; color:var(--text);
   }
@@ -93,6 +93,24 @@
         </div>
       </div>
 
+      <!-- New: per-tile exporter controls -->
+      <div class="row" style="margin-top:12px">
+        <div>
+          <label>Per-tile Export</label>
+          <div class="stack">
+            <span class="muted">Filename</span>
+            <input id="tileName" type="text" value="jop_tile_{x}_{y}.png" style="max-width:260px">
+            <span class="muted">(use {x},{y})</span>
+          </div>
+        </div>
+        <div>
+          <label>&nbsp;</label>
+          <div class="stack">
+            <button id="exportTilesBtn" disabled>Export Tiles (16×16 PNGs)</button>
+          </div>
+        </div>
+      </div>
+
       <div class="toolbar">
         <div class="left">
           <div class="pill">Output pixels: <code id="outSize">—</code></div>
@@ -122,6 +140,8 @@
   const showPixelGridEl = document.getElementById('showPixelGrid');
   const renderBtn = document.getElementById('renderBtn');
   const downloadBtn = document.getElementById('downloadBtn');
+  const exportTilesBtn = document.getElementById('exportTilesBtn');
+  const tileNameEl = document.getElementById('tileName');
   const outSizeEl = document.getElementById('outSize');
   const fitInfoEl = document.getElementById('fitInfo');
   const hoverInfoEl = document.getElementById('hoverInfo');
@@ -135,6 +155,7 @@
   // Helpers
   const clamp = (v,min,max) => Math.max(min, Math.min(max,v));
   const toHex = (r,g,b) => '#'+[r,g,b].map(v=>v.toString(16).toUpperCase().padStart(2,'0')).join('');
+  const sleep = (ms)=> new Promise(r=>setTimeout(r,ms)); // throttle downloads gently
 
   function loadImage(file){
     return new Promise((resolve,reject)=>{
@@ -195,8 +216,6 @@
       fit.dx, fit.dy, fit.dw, fit.dh
     );
 
-    // Optional “pixel snapping”: average to exact pixel centers to make sure every pixel is crisp.
-    // (Nearest neighbor via drawImage is usually enough; keeping it simple here.)
     lastOffscreen = off;
     outSizeEl.textContent = `${outW} × ${outH}`;
     fitInfoEl.textContent = fit.info;
@@ -215,7 +234,7 @@
     // Draw grid lines
     if(showPixelGridEl.checked || showTileGridEl.checked){
       ctx.save();
-      // thin lines for pixels
+      // pixel grid
       if(showPixelGridEl.checked){
         ctx.strokeStyle = 'rgba(255,255,255,0.12)';
         ctx.lineWidth = 1;
@@ -226,9 +245,9 @@
           ctx.beginPath(); ctx.moveTo(0,y*scale+0.5); ctx.lineTo(canvas.width,y*scale+0.5); ctx.stroke();
         }
       }
-      // thicker lines for tiles (16 px)
+      // tile grid (16 px)
       if(showTileGridEl.checked){
-        ctx.strokeStyle = 'rgba(56,189,248,0.65)'; // cyan-ish
+        ctx.strokeStyle = 'rgba(56,189,248,0.65)';
         ctx.lineWidth = 2;
         for(let x=0; x<=outW; x+=16){
           ctx.beginPath(); ctx.moveTo(x*scale+1,0); ctx.lineTo(x*scale+1,canvas.height); ctx.stroke();
@@ -241,15 +260,51 @@
     }
 
     downloadBtn.disabled = false;
+    exportTilesBtn.disabled = false;
   }
 
   function downloadPNG(){
     if(!lastOffscreen){ return; }
-    // Export the true-pixel version (not the scaled preview)
     const a = document.createElement('a');
     a.download = 'jop-pixel-art.png';
     a.href = lastOffscreen.toDataURL('image/png');
     a.click();
+  }
+
+  // NEW: per-tile PNG export
+  async function exportTiles(){
+    if(!lastOffscreen) return;
+    const outW = lastOffscreen.width;
+    const outH = lastOffscreen.height;
+    const tilesX = Math.floor(outW / 16);
+    const tilesY = Math.floor(outH / 16);
+    const namePattern = (tileNameEl.value || 'jop_tile_{x}_{y}.png').trim();
+
+    const tileCanvas = document.createElement('canvas');
+    tileCanvas.width = 16; tileCanvas.height = 16;
+    const tctx = tileCanvas.getContext('2d', { willReadFrequently:true });
+    tctx.imageSmoothingEnabled = false;
+
+    // Gentle throttle to avoid overwhelming the browser’s download queue
+    const THROTTLE_MS = 40;
+
+    for(let ty=0; ty<tilesY; ty++){
+      for(let tx=0; tx<tilesX; tx++){
+        tctx.clearRect(0,0,16,16);
+        tctx.drawImage(lastOffscreen, tx*16, ty*16, 16, 16, 0, 0, 16, 16);
+        const url = tileCanvas.toDataURL('image/png');
+        const a = document.createElement('a');
+        const fname = namePattern.replace('{x}', String(tx)).replace('{y}', String(ty));
+        a.download = fname;
+        a.href = url;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        // small pause
+        // eslint-disable-next-line no-await-in-loop
+        await sleep(THROTTLE_MS);
+      }
+    }
   }
 
   // Hover color readout
@@ -268,18 +323,20 @@
   });
 
   // Wire up
+  const renderIfReady = ()=>{ if(sourceImg) render(); };
+
   fileEl.addEventListener('change', async ()=>{
     const f = fileEl.files && fileEl.files[0];
     if(!f) return;
     sourceImg = await loadImage(f);
-    render(); // auto-generate on load
+    render();
   });
   renderBtn.addEventListener('click', render);
   downloadBtn.addEventListener('click', downloadPNG);
+  exportTilesBtn.addEventListener('click', exportTiles);
 
-  // Live re-render on setting changes (if image loaded)
   [tilesWEl, tilesHEl, fitEl, scaleEl, showTileGridEl, showPixelGridEl].forEach(el=>{
-    el.addEventListener('change', ()=>{ if(sourceImg) render(); });
+    el.addEventListener('change', renderIfReady);
   });
 })();
 </script>
